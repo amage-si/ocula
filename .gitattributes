@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.bend text
+*.png binary
+*.rgba binary
+*.bin binary

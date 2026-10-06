@@ -1,0 +1,75 @@
+# Validation
+
+## Native suite
+
+`tests.bend` runs 101 checks from the repository root:
+
+- 18 unit checks: the CRC-32 standard vector, out-of-range input bytes,
+  oversubscribed, incomplete, and over-long Huffman trees (including a length
+  of `U32` maximum), a complete tree reaching 15 bits, single-code trees,
+  LZ77 copies before the start, of distance zero, or past the output, pixel
+  bounds, array capacity (exact, power of two, rounded up), and channel order
+  with the capacity tail excluded in `packed_pixels` and `rgba_bytes`.
+- 8 file-read checks: empty, 100 bytes, 65535/65536/65537 bytes, exactly
+  2 MiB, a 2 MiB + 257 byte file cut at the 2 MiB + 1 sentinel, and an injected
+  short read followed by real reads to EOF. The OS was not forced to produce a
+  short read.
+- 34 valid PNGs decoded and compared with their source pixels by CRC-32.
+- 41 invalid PNGs that must be rejected.
+
+## Fixtures and oracle
+
+`tools/oracle.py --prepare-only` generates every fixture with Python's `zlib`
+and an independent PNG encoder, writes the expected pixels next to each valid
+PNG, and regenerates the Bend tables `fixtures/cases.bend` and
+`fixtures/reads.bend`. Generation is seeded. The dynamic-Huffman fixture asserts
+that the stream really uses a dynamic block (BTYPE 2).
+
+`tools/oracle.py --verify build/decode` runs the command-line decoder once per
+fixture, sequentially, and compares its RGBA output byte for byte. Invalid
+files must exit with code 1, print the expected reason, and write no output; a
+signal or timeout never counts as a rejection. With `--real`, it also decodes
+four PNGs from `/usr/share/pixmaps` and compares them with
+`magick <png> -depth 8 RGBA:<out>`. Python and ImageMagick are test
+infrastructure only; nothing in the library calls them.
+
+## Recorded results
+
+The first implementation round recorded, on Bend 2.0.35 and an AMD Ryzen 7
+5800H:
+
+| Step | Result |
+| --- | --- |
+| Checker on `tests.bend` | exit 0, 0.86 s |
+| Build of the suite | exit 0, 8.3 s, sampled peak RSS about 759 MiB |
+| Native suite | 101 PASS, 0.30 s, sampled peak RSS about 91 MiB |
+| Build of the decoder | exit 0, 7.0 s |
+| Oracle | 34 valid identical, 41 invalid rejected, 4 real PNGs identical to ImageMagick |
+
+Real PNGs (input SHA-256 recorded at the time): `filezilla.png` 48×48,
+`kitty.png` 256×256, `nvim.png` 128×128, `helium-browser.png` 256×256. Each
+decoded in about 0.02–0.11 s including process start-up and IO.
+
+An earlier revision passed 82 checks and 33 valid / 40 invalid fixtures. The
+current revision added rejection of Huffman lengths above 15, `gAMA` without
+`sRGB`, the read-limit and short-read cases, exact array capacity, and the
+`packed_pixels` helper, plus one valid fixture with `gAMA` before `sRGB`. No
+earlier case was removed. One rebuild of that revision was rejected by the
+checker (a test destructured the pair returned by `Array.size` directly); the
+test was fixed by passing the pair as a parameter, without crashing anything.
+
+## Integration in a window
+
+The sibling Splina demo decoded `kitty.png` with Ocula and drew it with an SVG
+heart through Dithra, Chromi, and Ankra. The demo was opened once, captured,
+and closed on its own after about 15 s with exit code 0. All 65536 pixels of the
+captured 256×256 PNG region matched an independent composition exactly,
+including 1445 partially transparent pixels. An early external close request
+used by the capture automation failed (exit 7), so that automation's raw result
+is not counted as a full pass; the window's own timed exit worked.
+
+Building that demo crossed a preventive 1920 MiB RSS guard set by the test
+supervisor and was stopped with SIGTERM; it was not a compiler crash. A later
+build of the same sources with a 3 GiB guard succeeded in 25.4 s with a sampled
+peak of about 1.92 GiB. Large import graphs need memory; build them one at a
+time.
