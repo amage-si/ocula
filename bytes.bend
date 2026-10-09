@@ -115,14 +115,3 @@ def get_or_zero(~T: Type, a: Array<U32>, i: U32, valid: Bool, f: U32 -> Array<U3
     case True{}:
       get(~T, a, i, f)
 
-# Two reads with no closure: the pair results are flat records, not heap nodes.
-def read2_pair(+x: U32, pair: Array<U32> & U32) -> Array<U32> & (U32 & U32):
-  (a, y) = pair
-  (a, (x, y))
-
-def read2_next(pair: Array<U32> & U32, +j: U32) -> Array<U32> & (U32 & U32):
-  (a, x) = pair
-  read2_pair(x, a[j])
-
-def read2(a: Array<U32>, +i: U32, +j: U32) -> Array<U32> & (U32 & U32):
-  read2_next(a[i], j)

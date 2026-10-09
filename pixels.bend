@@ -26,73 +26,86 @@ def predictor(filter: U32, a: U32, b: U32, c: U32) -> U32:
     case _:
       paeth(a, b, c)
 
-# One scanline byte per step: `cur` holds the raw byte and the byte above it,
-# read directly; the last four reconstructed bytes (l1..l4) and the four bytes
-# above them (u1..u4) are carried, so the left and upper-left neighbours need no
-# read. They start at zero, which is the PNG value before the first pixel.
-# Bytes above the first row are masked to zero by `top`.
-def row_bytes(n: Nat, cur: Array<U32> & (U32 & U32), +index: U32, +stride: U32, +bpp: U32, +filter: U32, +top: U32, +l1: U32, +l2: U32, +l3: U32, +l4: U32, +u1: U32, +u2: U32, +u3: U32, +u4: U32) -> Array<U32>:
-  match n:
-    case 0n:
-      (data, _) = cur
-      data
-    case 1n+p:
-      (data, (raw, up)) = cur
-      +b = U32.mul(up, top)
-      +wide = U32.is_eq(bpp, 4)
-      +v = U32.and(U32.add(raw, predictor(filter, Bool.pick(U32, wide, l4, l3), b, Bool.pick(U32, wide, u4, u3))), 255)
-      +next = U32.inc(index)
-      data = data[index] <- v
-      row_bytes(p, B.read2(data, next, U32.sub(next, stride)), next, stride, bpp, filter, top, v, l1, l2, l3, b, u1, u2, u3)
-
-def row(data: Array<U32>, +row_index: U32, +stride: U32, +bpp: U32) -> Result<&2, &1, String, Array<U32>>:
-  +start = U32.mul(row_index, stride)
-  +first = U32.inc(start)
-  B.get(~Result<&2, &1, String, Array<U32>>, data, start, +filter => data => (
-    do Result<&2, &1, String, Array<U32>>:
-      u : Unit <- B.require((filter <= 4 : U32), "unsupported PNG scanline filter")
-      return row_bytes(U32.to_nat(U32.sub(stride, 1)), B.read2(data, first, U32.sub(first, stride)), first, stride, bpp, filter, Bool.to_u32(U32.is_gt(row_index, 0)), 0, 0, 0, 0, 0, 0, 0, 0)
-  ))
-
-def rows(n: Nat, +y: U32, +stride: U32, +bpp: U32, r: Result<&2, &1, String, Array<U32>>) -> Result<&2, &1, String, Array<U32>>:
-  match n r:
-    case _ Fail{e}:
-      Fail{e}
-    case 0n Done{data}:
-      Done{data}
-    case 1n+p Done{data}:
-      rows(p, U32.inc(y), stride, bpp, row(data, y, stride, bpp))
-
 type Buffers is Type:
   Buffers{raw: Array<U32>, rgba: Array<U32>}
 
-def alpha(raw: Array<U32>, index: U32, rgba: Bool, f: U32 -> Array<U32> -> Buffers) -> Buffers:
-  match rgba:
-    case False{}:
-      f(255, raw)
-    case True{}:
-      B.get(~Buffers, raw, index, f)
+# Four consecutive scanline bytes, read without a closure.
+def quad(+r: U32, +g: U32, +b: U32, pair: Array<U32> & U32) -> Array<U32> & (U32 & (U32 & (U32 & U32))):
+  (raw, a) = pair
+  (raw, (r, (g, (b, a))))
 
-def pack_one(buffers: Buffers, +source: U32, dest: U32, rgba: Bool) -> Buffers:
-  match buffers:
-    case Buffers{raw, out}:
-      B.get(~Buffers, raw, source, r => raw => (
-        B.get(~Buffers, raw, U32.inc(source), g => raw => (
-          B.get(~Buffers, raw, U32.add(source, 2), b => raw => (
-            alpha(raw, U32.add(source, 3), rgba, a => raw => (
-              Buffers{raw, out[dest] <- (r * 16777216 + g * 65536 + b * 256 + a : U32)}
-            ))
-          ))
-        ))
-      ))
+def quad_b(+r: U32, +g: U32, pair: Array<U32> & U32, +i: U32) -> Array<U32> & (U32 & (U32 & (U32 & U32))):
+  (raw, b) = pair
+  quad(r, g, b, raw[U32.add(i, 3)])
 
-def pack(n: Nat, +index: U32, +width: U32, +stride: U32, +bpp: U32, buffers: Buffers) -> Buffers:
+def quad_g(+r: U32, pair: Array<U32> & U32, +i: U32) -> Array<U32> & (U32 & (U32 & (U32 & U32))):
+  (raw, g) = pair
+  quad_b(r, g, raw[U32.add(i, 2)], i)
+
+def quad_r(pair: Array<U32> & U32, +i: U32) -> Array<U32> & (U32 & (U32 & (U32 & U32))):
+  (raw, r) = pair
+  quad_g(r, raw[U32.inc(i)], i)
+
+def read4(raw: Array<U32>, +i: U32) -> Array<U32> & (U32 & (U32 & (U32 & U32))):
+  quad_r(raw[i], i)
+
+def channel(+filter: U32, +raw: U32, +a: U32, +b: U32, +c: U32) -> U32:
+  U32.and(U32.add(raw, predictor(filter, a, b, c)), 255)
+
+def done_row(cur: Array<U32> & (U32 & (U32 & (U32 & U32))), up: Array<U32> & U32) -> Buffers:
+  (raw, _) = cur
+  (rgba, _) = up
+  Buffers{raw, rgba}
+
+# Unfilters one scanline and packs it, one pixel per step. `cur` holds the
+# pixel's four raw bytes (the fourth is ignored for RGB), `up` the packed pixel
+# above it (masked to zero on the first row by `top`). The left pixel (l*) and
+# the upper-left one (u*) are carried, starting at zero as PNG defines before
+# the first pixel; scanlines are never written back.
+def row_pixels(n: Nat, cur: Array<U32> & (U32 & (U32 & (U32 & U32))), up: Array<U32> & U32, +i: U32, +o: U32, +width: U32, +bpp: U32, +filter: U32, +top: U32, +lr: U32, +lg: U32, +lb: U32, +la: U32, +ur: U32, +ug: U32, +ub: U32, +ua: U32) -> Buffers:
   match n:
     case 0n:
-      buffers
+      done_row(cur, up)
     case 1n+p:
-      source = ((index / width) * stride + 1 + (index % width) * bpp : U32)
-      pack(p, U32.inc(index), width, stride, bpp, pack_one(buffers, source, index, U32.is_eq(bpp, 4)))
+      (raw, quad) = cur
+      (r0, rest) = quad
+      (g0, rest) = rest
+      (b0, a0) = rest
+      (rgba, word) = up
+      +above = U32.mul(word, top)
+      +br = U32.div(above, 16777216)
+      +bg = U32.and(U32.div(above, 65536), 255)
+      +bb = U32.and(U32.div(above, 256), 255)
+      +ba = U32.and(above, 255)
+      +r = channel(filter, r0, lr, br, ur)
+      +g = channel(filter, g0, lg, bg, ug)
+      +b = channel(filter, b0, lb, bb, ub)
+      +a = channel(filter, a0, la, ba, ua)
+      +rgb = U32.is_eq(bpp, 3)
+      rgba = rgba[o] <- (r * 16777216 + g * 65536 + b * 256 + Bool.pick(U32, rgb, 255, a) : U32)
+      +next = U32.add(i, bpp)
+      +after = U32.inc(o)
+      row_pixels(p, read4(raw, next), rgba[U32.sub(after, width)], next, after, width, bpp, filter, top, r, g, b, a, br, bg, bb, ba)
+
+def row(buffers: Buffers, +y: U32, +width: U32, +stride: U32, +bpp: U32) -> Result<&2, &1, String, Buffers>:
+  match buffers:
+    case Buffers{raw, rgba}:
+      +start = U32.mul(y, stride)
+      +o = U32.mul(y, width)
+      B.get(~Result<&2, &1, String, Buffers>, raw, start, +filter => raw => (
+        do Result<&2, &1, String, Buffers>:
+          u : Unit <- B.require((filter <= 4 : U32), "unsupported PNG scanline filter")
+          return row_pixels(U32.to_nat(width), read4(raw, U32.inc(start)), rgba[U32.sub(o, width)], U32.inc(start), o, width, bpp, filter, Bool.to_u32(U32.is_gt(y, 0)), 0, 0, 0, 0, 0, 0, 0, 0)
+      ))
+
+def rows(n: Nat, +y: U32, +width: U32, +stride: U32, +bpp: U32, r: Result<&2, &1, String, Buffers>) -> Result<&2, &1, String, Buffers>:
+  match n r:
+    case _ Fail{e}:
+      Fail{e}
+    case 0n Done{buffers}:
+      Done{buffers}
+    case 1n+p Done{buffers}:
+      rows(p, U32.inc(y), width, stride, bpp, row(buffers, y, width, stride, bpp))
 
 def raster(width: U32, height: U32, buffers: Buffers) -> Raster:
   match buffers:
@@ -100,11 +113,10 @@ def raster(width: U32, height: U32, buffers: Buffers) -> Raster:
       Raster{width, height, out}
 
 def convert(raw: Array<U32>, +width: U32, +height: U32, +bpp: U32) -> Result<&2, &1, String, Raster>:
-  +count = U32.mul(width, height)
   +stride = U32.inc(U32.mul(width, bpp))
   do Result<&2, &1, String, Raster>:
-    raw : Array<U32> <- rows(U32.to_nat(height), 0, stride, bpp, Done{raw})
-    return raster(width, height, pack(U32.to_nat(count), 0, width, stride, bpp, Buffers{raw, B.allocate(count)}))
+    buffers : Buffers <- rows(U32.to_nat(height), 0, width, stride, bpp, Done{Buffers{raw, B.allocate(U32.mul(width, height))}})
+    return raster(width, height, buffers)
 
 def pixel(image: Raster, +x: U32, +y: U32) -> Result<&2, &1, String, Raster & U32>:
   match image:
