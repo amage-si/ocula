@@ -64,12 +64,52 @@ def crc_bits(n: Nat, +crc: U32) -> U32:
     case 1n+p:
       crc_bits(p, crc_step(crc, U32.is_ne(U32.and(crc, 1), 0)))
 
-def crc_fold(xs: +List<U32>, crc: U32) -> U32:
+# The 256 one-byte CRC-32 steps, so the fold below takes one table read per
+# byte instead of eight bit steps. Building it costs as much as eight bit
+# steps over 256 bytes, once per call.
+def crc_table(n: Nat, a: Array<U32>, +i: U32) -> Array<U32>:
+  match n:
+    case 0n:
+      a
+    case 1n+p:
+      a[i] <- crc_bits(8n, i)
+      crc_table(p, a, U32.inc(i))
+
+# `read` is the table read for the byte just consumed and `crc` the value
+# before it; the read is a parameter because a def cannot destructure a
+# computed pair.
+def crc_go(xs: +List<U32>, read: Array<U32> & U32, +crc: U32) -> Array<U32> & U32:
   match xs:
     case Nil{}:
-      crc
+      (tab, v) = read
+      (tab, U32.xor(U32.div(crc, 256), v))
     case Con{h, t}:
-      crc_fold(t, crc_bits(8n, U32.xor(crc, h)))
+      (tab, v) = read
+      +next = U32.xor(U32.div(crc, 256), v)
+      crc_go(t, tab[U32.and(U32.xor(next, h), 255)], next)
+
+# Folds xs into a running (pre-inverted) CRC and hands the table back.
+def crc_with(xs: +List<U32>, tab: Array<U32>, +crc: U32) -> Array<U32> & U32:
+  match xs:
+    case Nil{}:
+      (tab, crc)
+    case Con{h, t}:
+      crc_go(t, tab[U32.and(U32.xor(crc, h), 255)], crc)
+
+def crc_value(pair: Array<U32> & U32) -> U32:
+  (tab, crc) = pair
+  crc
+
+def crc_then(b: +List<U32>, pair: Array<U32> & U32) -> U32:
+  (tab, crc) = pair
+  crc_value(crc_with(b, tab, crc))
+
+def crc_fold(xs: +List<U32>, +crc: U32) -> U32:
+  crc_value(crc_with(xs, crc_table(256n, [0 : U32*256n], 0), crc))
+
+# CRC of a then b with one table, as a PNG chunk's type and data.
+def crc_fold2(a: +List<U32>, b: +List<U32>, +crc: U32) -> U32:
+  crc_then(b, crc_with(a, crc_table(256n, [0 : U32*256n], 0), crc))
 
 def crc32(xs: +List<U32>) -> U32:
   U32.xor(crc_fold(xs, 4294967295), 4294967295)

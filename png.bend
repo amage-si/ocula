@@ -30,7 +30,7 @@ def chunk(r: B.Reader) -> Result<&2, &1, String, Chunk>:
           B.read_bytes(~Chunk, U32.to_nat(length), r, +data => r => (
             B.read32(~Chunk, r, crc => r => (
               do Result<&2, &1, String, Chunk>:
-                u : Unit <- B.require(U32.is_eq(crc, U32.xor(B.crc_fold(data, B.crc_fold(kind_bytes(kind), 4294967295)), 4294967295)), "PNG CRC-32 mismatch")
+                u : Unit <- B.require(U32.is_eq(crc, U32.xor(B.crc_fold2(kind_bytes(kind), data, 4294967295), 4294967295)), "PNG CRC-32 mismatch")
                 return Chunk{kind, data, r}
             ))
           ))
