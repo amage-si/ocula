@@ -9,8 +9,8 @@ type Output is Type:
 
 # Decoder state, threaded through first-order helpers (no closure per symbol).
 #
-# `src` holds the zlib payload (after the two header bytes) at [0, inlen),
-# zeros at [inlen, tab), and the tables at `tab` (see `inflate_tables`):
+# `src` holds the zlib stream at [0, end) (DEFLATE data from 2, after the
+# header), zeros at [end, tab), and the tables at tab = end + 16:
 #   tab + 0     literal/length Huffman table   (1024 slots)
 #   tab + 1024  distance Huffman table          (1024 slots)
 #   tab + 2048  code-length Huffman table       (1024 slots)
@@ -22,9 +22,9 @@ type Output is Type:
 #
 # `buf` holds the unread bits, least significant first; `top` is 2^(number
 # of bits in buf), so consuming k bits divides both by 2^k and no variable
-# shift is needed. Bytes are read at min(pos, inlen), so a read past the end
+# shift is needed. Bytes are read at min(pos, end), so a read past the end
 # yields zeros from the padding; `pos` still counts them, and a refill that
-# moves `pos` past `inlen` flags the stream as truncated (a valid stream
+# moves `pos` past `end` flags the stream as truncated (a valid stream
 # never gets there, since its Adler-32 trailer follows the last block).
 #
 # `err` is 0 while decoding, 1 at the end of a block, else an error code (see
@@ -65,28 +65,28 @@ def flag(bad: Bool, +err: U32, +code: U32) -> U32:
 
 # Bit input ------------------------------------------------------------------
 
-def refill_done(+b0: U32, r: Array<U32> & U32, out: Array<U32>, +pos: U32, +buf: U32, +top: U32, used: U32, +err: U32, +inlen: U32) -> Inf:
+def refill_done(+b0: U32, r: Array<U32> & U32, out: Array<U32>, +pos: U32, +buf: U32, +top: U32, used: U32, +err: U32, +end: U32) -> Inf:
   (src, +b1) = r
   +next = U32.add(pos, 2)
-  Inf{src, out, next, (buf + b0 * top + b1 * top * 256 : U32), U32.mul(top, 65536), used, flag(U32.is_gt(next, inlen), err, 9)}
+  Inf{src, out, next, (buf + b0 * top + b1 * top * 256 : U32), U32.mul(top, 65536), used, flag(U32.is_gt(next, end), err, 9)}
 
-def refill_one(r: Array<U32> & U32, out: Array<U32>, +pos: U32, buf: U32, top: U32, used: U32, err: U32, +inlen: U32) -> Inf:
+def refill_one(r: Array<U32> & U32, out: Array<U32>, +pos: U32, buf: U32, top: U32, used: U32, err: U32, +end: U32) -> Inf:
   (src, b0) = r
-  refill_done(b0, src[U32.min(U32.inc(pos), inlen)], out, pos, buf, top, used, err, inlen)
+  refill_done(b0, src[U32.min(U32.inc(pos), end)], out, pos, buf, top, used, err, end)
 
-def refill_when(need: Bool, src: Array<U32>, out: Array<U32>, +pos: U32, buf: U32, top: U32, used: U32, err: U32, +inlen: U32) -> Inf:
+def refill_when(need: Bool, src: Array<U32>, out: Array<U32>, +pos: U32, buf: U32, top: U32, used: U32, err: U32, +end: U32) -> Inf:
   match need:
     case False{}:
       Inf{src, out, pos, buf, top, used, err}
     case True{}:
-      refill_one(src[U32.min(pos, inlen)], out, pos, buf, top, used, err, inlen)
+      refill_one(src[U32.min(pos, end)], out, pos, buf, top, used, err, end)
 
 # Guarantees at least 16 bits in `buf` (from fewer than 16, two bytes fit in
 # 32 bits). Every take or decode below consumes at most 15 bits after one.
-def refill(st: Inf, +inlen: U32) -> Inf:
+def refill(st: Inf, +end: U32) -> Inf:
   match st:
     case Inf{src, out, pos, buf, +top, used, err}:
-      refill_when(U32.is_lt(top, 65536), src, out, pos, buf, top, used, err, inlen)
+      refill_when(U32.is_lt(top, 65536), src, out, pos, buf, top, used, err, end)
 
 # Takes k bits, given pw = 2^k.
 def take(st: Inf, +pw: U32) -> Inf & U32:
@@ -361,55 +361,55 @@ def distance_done(r: Inf & U32, +base: U32, +length: U32, +limit: U32) -> Inf:
     case Inf{src, out, pos, buf, top, +used, +err}:
       copy_back(src, pos, buf, top, copy_checked(out, used, limit, length, U32.add(base, extra), err))
 
-def distance_info(r: Array<U32> & U32, out: Array<U32>, pos: U32, buf: U32, top: U32, used: U32, err: U32, +length: U32, +inlen: U32, +limit: U32) -> Inf:
+def distance_info(r: Array<U32> & U32, out: Array<U32>, pos: U32, buf: U32, top: U32, used: U32, err: U32, +length: U32, +end: U32, +limit: U32) -> Inf:
   (src, +e) = r
-  distance_done(take(refill(Inf{src, out, pos, buf, top, used, err}, inlen), U32.and(e, 65535)), U32.div(e, 65536), length, limit)
+  distance_done(take(refill(Inf{src, out, pos, buf, top, used, err}, end), U32.and(e, 65535)), U32.div(e, 65536), length, limit)
 
-def distance_symbol(r: Inf & U32, +length: U32, +inlen: U32, +limit: U32, +tab: U32) -> Inf:
+def distance_symbol(r: Inf & U32, +length: U32, +end: U32, +limit: U32, +tab: U32) -> Inf:
   (st, +d) = r
   match st:
     case Inf{src, out, pos, buf, top, used, +err}:
-      distance_info(src[(tab + 3104 + U32.and(d, 31) : U32)], out, pos, buf, top, used, flag(U32.is_ge(d, 30), err, 4), length, inlen, limit)
+      distance_info(src[(tab + 3104 + U32.and(d, 31) : U32)], out, pos, buf, top, used, flag(U32.is_ge(d, 30), err, 4), length, end, limit)
 
-def length_done(r: Inf & U32, +base: U32, +inlen: U32, +limit: U32, +tab: U32) -> Inf:
+def length_done(r: Inf & U32, +base: U32, +end: U32, +limit: U32, +tab: U32) -> Inf:
   (st, +extra) = r
-  distance_symbol(decode(refill(st, inlen), U32.add(tab, 1024)), U32.add(base, extra), inlen, limit, tab)
+  distance_symbol(decode(refill(st, end), U32.add(tab, 1024)), U32.add(base, extra), end, limit, tab)
 
-def length_info(r: Array<U32> & U32, out: Array<U32>, pos: U32, buf: U32, top: U32, used: U32, err: U32, +inlen: U32, +limit: U32, +tab: U32) -> Inf:
+def length_info(r: Array<U32> & U32, out: Array<U32>, pos: U32, buf: U32, top: U32, used: U32, err: U32, +end: U32, +limit: U32, +tab: U32) -> Inf:
   (src, +e) = r
-  length_done(take(refill(Inf{src, out, pos, buf, top, used, err}, inlen), U32.and(e, 65535)), U32.div(e, 65536), inlen, limit, tab)
+  length_done(take(refill(Inf{src, out, pos, buf, top, used, err}, end), U32.and(e, 65535)), U32.div(e, 65536), end, limit, tab)
 
-def length_code(st: Inf, +sym: U32, +inlen: U32, +limit: U32, +tab: U32) -> Inf:
+def length_code(st: Inf, +sym: U32, +end: U32, +limit: U32, +tab: U32) -> Inf:
   match st:
     case Inf{src, out, pos, buf, top, used, +err}:
-      length_info(src[(tab + 3072 + U32.and(U32.sub(sym, 257), 31) : U32)], out, pos, buf, top, used, flag(U32.is_gt(sym, 285), err, 3), inlen, limit, tab)
+      length_info(src[(tab + 3072 + U32.and(U32.sub(sym, 257), 31) : U32)], out, pos, buf, top, used, flag(U32.is_gt(sym, 285), err, 3), end, limit, tab)
 
 def block_end(st: Inf) -> Inf:
   match st:
     case Inf{src, out, pos, buf, top, used, +err}:
       Inf{src, out, pos, buf, top, used, fail(err, 1)}
 
-def dispatch(lit: Bool, end: Bool, st: Inf, +sym: U32, +inlen: U32, +limit: U32, +tab: U32) -> Inf:
-  match lit end:
+def dispatch(lit: Bool, stop: Bool, st: Inf, +sym: U32, +end: U32, +limit: U32, +tab: U32) -> Inf:
+  match lit stop:
     case True{} _:
       literal(st, sym, limit)
     case False{} True{}:
       block_end(st)
     case False{} False{}:
-      length_code(st, sym, inlen, limit, tab)
+      length_code(st, sym, end, limit, tab)
 
-def symbol_step(r: Inf & U32, +inlen: U32, +limit: U32, +tab: U32) -> Inf:
+def symbol_step(r: Inf & U32, +end: U32, +limit: U32, +tab: U32) -> Inf:
   (st, +sym) = r
-  dispatch(U32.is_lt(sym, 256), U32.is_eq(sym, 256), st, sym, inlen, limit, tab)
+  dispatch(U32.is_lt(sym, 256), U32.is_eq(sym, 256), st, sym, end, limit, tab)
 
 # One literal/length symbol per step, until end-of-block or an error. Every
 # symbol but end-of-block writes at least one byte, so limit + 1 steps suffice.
-def run(n: Nat, st: Inf, +inlen: U32, +limit: U32, +tab: U32) -> Inf:
+def run(n: Nat, st: Inf, +end: U32, +limit: U32, +tab: U32) -> Inf:
   match n st:
     case 0n Inf{src, out, pos, buf, top, used, 0}:
       Inf{src, out, pos, buf, top, used, 8}
     case 1n+p Inf{src, out, pos, buf, top, used, 0}:
-      run(p, symbol_step(decode(refill(Inf{src, out, pos, buf, top, used, 0}, inlen), tab), inlen, limit, tab), inlen, limit, tab)
+      run(p, symbol_step(decode(refill(Inf{src, out, pos, buf, top, used, 0}, end), tab), end, limit, tab), end, limit, tab)
     case _ Inf{src, out, pos, buf, top, used, err}:
       Inf{src, out, pos, buf, top, used, err}
 
@@ -427,12 +427,12 @@ def block_done(st: Inf) -> Result<&2, &1, String, Inf>:
     case Inf{src, out, pos, buf, top, used, err}:
       ended(err, src, out, pos, buf, top, used)
 
-def compressed(st: Inf, lit: Huffman, dist: Huffman, +inlen: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
+def compressed(st: Inf, lit: Huffman, dist: Huffman, +end: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
   match st:
     case Inf{src, out, pos, buf, top, used, err}:
       src = build(src, tab, lit)
       src = build(src, U32.add(tab, 1024), dist)
-      block_done(run(U32.to_nat(U32.inc(limit)), Inf{src, out, pos, buf, top, used, err}, inlen, limit, tab))
+      block_done(run(U32.to_nat(U32.inc(limit)), Inf{src, out, pos, buf, top, used, err}, end, limit, tab))
 
 def checked_value(+err: U32, st: Inf, v: U32) -> Result<&2, &1, String, Inf & U32>:
   match err:
@@ -452,11 +452,11 @@ def apply_read(-T: Type, pair: Inf & U32, f: U32 -> Inf -> Result<&2, &1, String
   f(value, st)
 
 # Reads k bits, given pw = 2^k with k <= 15.
-def read(~T: Type, +pw: U32, st: Inf, +inlen: U32, f: U32 -> Inf -> Result<&2, &1, String, T>) -> Result<&2, &1, String, T>:
-  Result.bind(&2, &1, String, Inf & U32, T, checked(take(refill(st, inlen), pw)), pair => apply_read(T, pair, f))
+def read(~T: Type, +pw: U32, st: Inf, +end: U32, f: U32 -> Inf -> Result<&2, &1, String, T>) -> Result<&2, &1, String, T>:
+  Result.bind(&2, &1, String, Inf & U32, T, checked(take(refill(st, end), pw)), pair => apply_read(T, pair, f))
 
-def read_symbol(~T: Type, +base: U32, st: Inf, +inlen: U32, f: U32 -> Inf -> Result<&2, &1, String, T>) -> Result<&2, &1, String, T>:
-  Result.bind(&2, &1, String, Inf & U32, T, checked(decode(refill(st, inlen), base)), pair => apply_read(T, pair, f))
+def read_symbol(~T: Type, +base: U32, st: Inf, +end: U32, f: U32 -> Inf -> Result<&2, &1, String, T>) -> Result<&2, &1, String, T>:
+  Result.bind(&2, &1, String, Inf & U32, T, checked(decode(refill(st, end), base)), pair => apply_read(T, pair, f))
 
 def log2(n: Nat, +x: U32, +acc: U32) -> U32:
   match n x:
@@ -488,38 +488,38 @@ def stored_loop(n: Nat, cur: Array<U32> & U32, out: Array<U32>, +i: U32, +used: 
       +next = U32.inc(i)
       stored_loop(p, src[next], out, next, U32.inc(used))
 
-def stored_copy(st: Inf, +length: U32, +inlen: U32, +limit: U32) -> Result<&2, &1, String, Inf>:
+def stored_copy(st: Inf, +length: U32, +end: U32, +limit: U32) -> Result<&2, &1, String, Inf>:
   match st:
     case Inf{src, out, +pos, _, _, +used, _}:
       do Result<&2, &1, String, Inf>:
         u : Unit <- B.require((length <= limit - used : U32), "DEFLATE output exceeds exact image size")
-        u : Unit <- B.require((pos <= inlen : U32) && (length <= inlen - pos : U32), "truncated DEFLATE bitstream")
+        u : Unit <- B.require((pos <= end : U32) && (length <= end - pos : U32), "truncated DEFLATE bitstream")
         return stored_loop(U32.to_nat(length), src[pos], out, pos, used)
 
-def stored(st: Inf, +inlen: U32, +limit: U32) -> Result<&2, &1, String, Inf>:
-  read(~Inf, 65536, align(st), inlen, +length => st => (
-    read(~Inf, 65536, st, inlen, inverse => st => (
+def stored(st: Inf, +end: U32, +limit: U32) -> Result<&2, &1, String, Inf>:
+  read(~Inf, 65536, align(st), end, +length => st => (
+    read(~Inf, 65536, st, end, inverse => st => (
       do Result<&2, &1, String, Inf>:
         u : Unit <- B.require(U32.is_eq(U32.xor(length, inverse), 65535), "DEFLATE stored length complement mismatch")
-        stored_copy(st, length, inlen, limit)
+        stored_copy(st, length, end, limit)
     ))
   ))
 
 type CodeLengths is Type:
   CodeLengths{st: Inf, values: +List<U32>}
 
-def code_lengths(n: Nat, +index: U32, +inlen: U32, r: Result<&2, &1, String, CodeLengths>) -> Result<&2, &1, String, CodeLengths>:
+def code_lengths(n: Nat, +index: U32, +end: U32, r: Result<&2, &1, String, CodeLengths>) -> Result<&2, &1, String, CodeLengths>:
   match n r:
     case _ Fail{e}:
       Fail{e}
     case 0n Done{state}:
       Done{state}
     case 1n+p Done{CodeLengths{st, values}}:
-      next = read(~CodeLengths, 8, st, inlen, v => st => (
+      next = read(~CodeLengths, 8, st, end, v => st => (
         order = at([16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15], U32.to_nat(index))
         Done{CodeLengths{st, List.set(&2, U32, values, U32.to_nat(order), v)}}
       ))
-      code_lengths(p, U32.inc(index), inlen, next)
+      code_lengths(p, U32.inc(index), end, next)
 
 type LengthState is Type:
   LengthState{st: Inf, reversed: +List<U32>, remaining: U32, previous: U32, has_previous: Bool}
@@ -529,20 +529,20 @@ def repeat_lengths(+count: U32, +value: U32, st: Inf, acc: +List<U32>, +remainin
     u : Unit <- B.require((count <= remaining : U32), "Huffman repeat exceeds declared lengths")
     return LengthState{st, List.append(&2, U32, List.replicate(U32, U32.to_nat(count), value), acc), U32.sub(remaining, count), value, True{}}
 
-def length_symbol(code: U32, st: Inf, +inlen: U32, acc: +List<U32>, remaining: U32, previous: U32, has_previous: Bool) -> Result<&2, &1, String, LengthState>:
+def length_symbol(code: U32, st: Inf, +end: U32, acc: +List<U32>, remaining: U32, previous: U32, has_previous: Bool) -> Result<&2, &1, String, LengthState>:
   match code:
     case 16:
       do Result<&2, &1, String, LengthState>:
         u : Unit <- B.require(has_previous, "Huffman repeat without previous length")
-        read(~LengthState, 4, st, inlen, v => st => repeat_lengths(U32.add(v, 3), previous, st, acc, remaining))
+        read(~LengthState, 4, st, end, v => st => repeat_lengths(U32.add(v, 3), previous, st, acc, remaining))
     case 17:
-      read(~LengthState, 8, st, inlen, v => st => repeat_lengths(U32.add(v, 3), 0, st, acc, remaining))
+      read(~LengthState, 8, st, end, v => st => repeat_lengths(U32.add(v, 3), 0, st, acc, remaining))
     case 18:
-      read(~LengthState, 128, st, inlen, v => st => repeat_lengths(U32.add(v, 11), 0, st, acc, remaining))
+      read(~LengthState, 128, st, end, v => st => repeat_lengths(U32.add(v, 11), 0, st, acc, remaining))
     case value:
       repeat_lengths(1, value, st, acc, remaining)
 
-def lengths_loop(fuel: Nat, +tab: U32, +inlen: U32, r: Result<&2, &1, String, LengthState>) -> Result<&2, &1, String, LengthState>:
+def lengths_loop(fuel: Nat, +tab: U32, +end: U32, r: Result<&2, &1, String, LengthState>) -> Result<&2, &1, String, LengthState>:
   match fuel r:
     case _ Fail{e}:
       Fail{e}
@@ -551,8 +551,8 @@ def lengths_loop(fuel: Nat, +tab: U32, +inlen: U32, r: Result<&2, &1, String, Le
     case 0n Done{_}:
       Fail{"Huffman length work limit"}
     case 1n+p Done{LengthState{st, acc, remaining, previous, has_previous}}:
-      next = read_symbol(~LengthState, U32.add(tab, 2048), st, inlen, code => st => length_symbol(code, st, inlen, acc, remaining, previous, has_previous))
-      lengths_loop(p, tab, inlen, next)
+      next = read_symbol(~LengthState, U32.add(tab, 2048), st, end, code => st => length_symbol(code, st, end, acc, remaining, previous, has_previous))
+      lengths_loop(p, tab, end, next)
 
 def distance_tree(+lengths: +List<U32>, empty: Bool) -> Result<&2, &1, String, Huffman>:
   match empty:
@@ -561,7 +561,7 @@ def distance_tree(+lengths: +List<U32>, empty: Bool) -> Result<&2, &1, String, H
     case False{}:
       tree(lengths, True{})
 
-def dynamic_finish(nlit: U32, state: LengthState, +inlen: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
+def dynamic_finish(nlit: U32, state: LengthState, +end: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
   match state:
     case LengthState{st, acc, _, _, _}:
       +values = List.reverse(&2, U32, acc)
@@ -572,30 +572,30 @@ def dynamic_finish(nlit: U32, state: LengthState, +inlen: U32, +limit: U32, +tab
         u : Unit <- B.require(U32.is_ne(at(ls, 256n), 0), "Huffman literal tree has no end-of-block")
         lit : Huffman <- tree(ls, True{})
         dist : Huffman <- distance_tree(ds, U32.is_eq(count_length(ds, 0, 0), U32.from_nat(List.length(&2, U32, ds))))
-        compressed(st, lit, dist, inlen, limit, tab)
+        compressed(st, lit, dist, end, limit, tab)
 
 def with_code_table(+tab: U32, codes: Huffman, st: Inf) -> Inf:
   match st:
     case Inf{src, out, pos, buf, top, used, err}:
       Inf{build(src, U32.add(tab, 2048), codes), out, pos, buf, top, used, err}
 
-def dynamic_codes(+nlit: U32, ndist: U32, state: CodeLengths, +inlen: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
+def dynamic_codes(+nlit: U32, ndist: U32, state: CodeLengths, +end: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
   match state:
     case CodeLengths{st, values}:
       +count = U32.add(nlit, ndist)
       do Result<&2, &1, String, Inf>:
         codes : Huffman <- tree(values, False{})
-        state : LengthState <- lengths_loop(U32.to_nat(count), tab, inlen, Done{LengthState{with_code_table(tab, codes, st), Nil{}, count, 0, False{}}})
-        dynamic_finish(nlit, state, inlen, limit, tab)
+        state : LengthState <- lengths_loop(U32.to_nat(count), tab, end, Done{LengthState{with_code_table(tab, codes, st), Nil{}, count, 0, False{}}})
+        dynamic_finish(nlit, state, end, limit, tab)
 
-def dynamic(st: Inf, +inlen: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
-  read(~Inf, 32, st, inlen, +hlit => st => (
-    read(~Inf, 32, st, inlen, hdist => st => (
-      read(~Inf, 16, st, inlen, hclen => st => (
+def dynamic(st: Inf, +end: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
+  read(~Inf, 32, st, end, +hlit => st => (
+    read(~Inf, 32, st, end, hdist => st => (
+      read(~Inf, 16, st, end, hclen => st => (
         do Result<&2, &1, String, Inf>:
           u : Unit <- B.require((hlit <= 29 : U32), "reserved HLIT count")
-          cls : CodeLengths <- code_lengths(U32.to_nat(U32.add(hclen, 4)), 0, inlen, Done{CodeLengths{st, List.replicate(U32, 19n, 0)}})
-          dynamic_codes(U32.add(hlit, 257), U32.inc(hdist), cls, inlen, limit, tab)
+          cls : CodeLengths <- code_lengths(U32.to_nat(U32.add(hclen, 4)), 0, end, Done{CodeLengths{st, List.replicate(U32, 19n, 0)}})
+          dynamic_codes(U32.add(hlit, 257), U32.inc(hdist), cls, end, limit, tab)
       ))
     ))
   ))
@@ -603,17 +603,17 @@ def dynamic(st: Inf, +inlen: U32, +limit: U32, +tab: U32) -> Result<&2, &1, Stri
 def fixed_lengths() -> +List<U32>:
   List.concat(&2, U32, [List.replicate(U32, 144n, 8), List.replicate(U32, 112n, 9), List.replicate(U32, 24n, 7), List.replicate(U32, 8n, 8)])
 
-def block(kind: U32, st: Inf, +inlen: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
+def block(kind: U32, st: Inf, +end: U32, +limit: U32, +tab: U32) -> Result<&2, &1, String, Inf>:
   match kind:
     case 0:
-      stored(st, inlen, limit)
+      stored(st, end, limit)
     case 1:
       do Result<&2, &1, String, Inf>:
         lit : Huffman <- tree(fixed_lengths(), True{})
         dist : Huffman <- tree(List.replicate(U32, 32n, 5), True{})
-        compressed(st, lit, dist, inlen, limit, tab)
+        compressed(st, lit, dist, end, limit, tab)
     case 2:
-      dynamic(st, inlen, limit, tab)
+      dynamic(st, end, limit, tab)
     case _:
       Fail{"reserved DEFLATE block type"}
 
@@ -627,7 +627,7 @@ def block_result(final: U32, r: Result<&2, &1, String, Inf>) -> Result<&2, &1, S
     case Done{st}:
       Done{Step{st, U32.is_eq(final, 1)}}
 
-def blocks(fuel: Nat, +inlen: U32, +limit: U32, +tab: U32, r: Result<&2, &1, String, Step>) -> Result<&2, &1, String, Step>:
+def blocks(fuel: Nat, +end: U32, +limit: U32, +tab: U32, r: Result<&2, &1, String, Step>) -> Result<&2, &1, String, Step>:
   match fuel r:
     case _ Fail{e}:
       Fail{e}
@@ -636,8 +636,8 @@ def blocks(fuel: Nat, +inlen: U32, +limit: U32, +tab: U32, r: Result<&2, &1, Str
     case 0n Done{_}:
       Fail{"DEFLATE block limit (65536)"}
     case 1n+p Done{Step{st, False{}}}:
-      next = read(~Step, 2, st, inlen, final => st => read(~Step, 4, st, inlen, kind => st => block_result(final, block(kind, st, inlen, limit, tab))))
-      blocks(p, inlen, limit, tab, next)
+      next = read(~Step, 2, st, end, final => st => read(~Step, 4, st, end, kind => st => block_result(final, block(kind, st, end, limit, tab))))
+      blocks(p, end, limit, tab, next)
 
 # Adler-32 over data[0..n). The sums are reduced every 5552 bytes, as in zlib:
 # 5552 is the largest run for which b cannot pass 2^32 starting from a, b <
@@ -676,34 +676,81 @@ def trailer(n: Nat, cur: Array<U32> & U32, +i: U32, +acc: U32) -> U32:
       +next = U32.inc(i)
       trailer(p, src[next], next, (acc * 256 + v : U32))
 
-def finish_aligned(st: Inf, +inlen: U32, +limit: U32) -> Result<&2, &1, String, Array<U32>>:
+def finish_aligned(st: Inf, +end: U32, +limit: U32) -> Result<&2, &1, String, Array<U32>>:
   match st:
     case Inf{src, out, +pos, _, _, +used, _}:
       do Result<&2, &1, String, Array<U32>>:
-        u : Unit <- B.require((pos <= inlen : U32) && U32.is_eq(U32.sub(inlen, pos), 4), "missing Adler-32 or trailing bytes after zlib stream")
+        u : Unit <- B.require((pos <= end : U32) && U32.is_eq(U32.sub(end, pos), 4), "missing Adler-32 or trailing bytes after zlib stream")
         u : Unit <- B.require(U32.is_eq(used, limit), "DEFLATE output is shorter than image size")
         check_adler(trailer(4n, src[pos], pos, 0), adler32(out, limit))
 
-def finish(+inlen: U32, +limit: U32, state: Step) -> Result<&2, &1, String, Array<U32>>:
+def finish(+end: U32, +limit: U32, state: Step) -> Result<&2, &1, String, Array<U32>>:
   match state:
     case Step{st, _}:
-      finish_aligned(align(st), inlen, limit)
+      finish_aligned(align(st), end, limit)
 
-def start(rest: +List<U32>, +inlen: U32, +size: U32) -> Result<&2, &1, String, Array<U32>>:
-  +tab = U32.add(inlen, 16)
-  src = inflate_tables(put_list(rest, B.allocate(U32.add(tab, 3136)), 0), tab)
-  Result.bind(&2, &1, String, Step, Array<U32>, blocks(65536n, inlen, size, tab, Done{Step{Inf{src, B.allocate(size), 0, 0, 1, 0, 0}, False{}}}), state => finish(inlen, size, state))
+def header_pair(+cmf: U32, pair: Array<U32> & U32) -> Array<U32> & (U32 & U32):
+  (src, +flg) = pair
+  (src, (cmf, flg))
 
-def inflate(bytes: +List<U32>, +size: U32) -> Result<&2, &1, String, Array<U32>>:
-  match bytes:
-    case +cmf <> +flg <> +rest:
-      +inlen = U32.from_nat(List.length(&2, U32, rest))
-      do Result<&2, &1, String, Array<U32>>:
-        u : Unit <- B.require((size > 0 : U32) && (size <= 1052672 : U32), "inflate allocation limit")
-        u : Unit <- B.require((inlen <= 2097152 : U32), "inflate input limit")
-        u : Unit <- B.require(U32.is_eq(cmf, 120), "unsupported zlib header (requires DEFLATE, 32 KiB window)")
-        u : Unit <- B.require(U32.is_eq(((cmf * 256 + flg) % 31 : U32), 0), "invalid zlib FCHECK")
-        u : Unit <- B.require(U32.is_eq(U32.and(flg, 32), 0), "zlib preset dictionary is unsupported")
-        start(rest, inlen, size)
-    case _:
-      Fail{"truncated zlib header"}
+def header_byte(pair: Array<U32> & U32, +i: U32) -> Array<U32> & (U32 & U32):
+  (src, +cmf) = pair
+  header_pair(cmf, src[i])
+
+# Writes a list from index i; answers the array and the index after it.
+def put_counted(xs: +List<U32>, src: Array<U32>, +i: U32) -> Array<U32> & U32:
+  match xs:
+    case Nil{}:
+      (src, i)
+    case +h <> t:
+      src = src[i] <- h
+      put_counted(t, src, U32.inc(i))
+
+def put_parts(parts: +List<+List<U32>>, pair: Array<U32> & U32) -> Array<U32> & U32:
+  match parts:
+    case Nil{}:
+      pair
+    case +part <> rest:
+      (src, +i) = pair
+      put_parts(rest, put_counted(part, src, i))
+
+def start(src: Array<U32>, +end: U32, +size: U32) -> Result<&2, &1, String, Array<U32>>:
+  Result.bind(&2, &1, String, Step, Array<U32>, blocks(65536n, end, size, U32.add(end, 16), Done{Step{Inf{src, B.allocate(size), 2, 0, 1, 0, 0}, False{}}}), state => finish(end, size, state))
+
+def zlib_header(src: Array<U32>, +cmf: U32, +flg: U32, +end: U32, +size: U32) -> Result<&2, &1, String, Array<U32>>:
+  do Result<&2, &1, String, Array<U32>>:
+    u : Unit <- B.require(U32.is_eq(cmf, 120), "unsupported zlib header (requires DEFLATE, 32 KiB window)")
+    u : Unit <- B.require(U32.is_eq(((cmf * 256 + flg) % 31 : U32), 0), "invalid zlib FCHECK")
+    u : Unit <- B.require(U32.is_eq(U32.and(flg, 32), 0), "zlib preset dictionary is unsupported")
+    start(src, end, size)
+
+def checked_header(pair: Array<U32> & (U32 & U32), +end: U32, +size: U32) -> Result<&2, &1, String, Array<U32>>:
+  (src, header) = pair
+  (cmf, flg) = header
+  zlib_header(src, cmf, flg, end, size)
+
+def loaded(pair: Array<U32> & U32, +end: U32, +size: U32) -> Result<&2, &1, String, Array<U32>>:
+  (src, +written) = pair
+  src = inflate_tables(src, U32.add(end, 16))
+  do Result<&2, &1, String, Array<U32>>:
+    u : Unit <- B.require(U32.is_eq(written, end), "inflate input length mismatch")
+    checked_header(header_byte(src[0], 1), end, size)
+
+def load(parts: +List<+List<U32>>, +end: U32, +size: U32) -> Result<&2, &1, String, Array<U32>>:
+  loaded(put_parts(parts, (B.allocate((end + 16 + 3136 : U32)), 0)), end, size)
+
+# Inflates a zlib stream given as consecutive parts (the IDAT chunks, in
+# order) of `total` bytes, into exactly `size` bytes. The parts are written
+# into one array sized from `total` (bounded first), so the stream is never
+# concatenated as a list; the bytes written must then equal `total`. A wrong
+# `total` is rejected before decoding, and writes past the array wrap
+# without leaving it.
+def inflate_parts(+parts: +List<+List<U32>>, +total: U32, +size: U32) -> Result<&2, &1, String, Array<U32>>:
+  do Result<&2, &1, String, Array<U32>>:
+    u : Unit <- B.require((size > 0 : U32) && (size <= 1052672 : U32), "inflate allocation limit")
+    u : Unit <- B.require((total <= 2097152 : U32), "inflate input limit")
+    u : Unit <- B.require((total >= 2 : U32), "truncated zlib header")
+    load(parts, total, size)
+
+def inflate(+bytes: +List<U32>, +size: U32) -> Result<&2, &1, String, Array<U32>>:
+  inflate_parts([bytes], U32.from_nat(List.length(&2, U32, bytes)), size)

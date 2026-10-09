@@ -9,10 +9,9 @@ def Raster() -> Type:
 
 def decode_parsed(parsed: P.Parsed) -> Result<&2, &1, String, Pixels.Raster>:
   match parsed:
-    case P.Parsed{_, P.Header{+width, +height, +bpp}, _, parts, _, _}:
-      data = List.concat(&2, U32, List.reverse(&2, +List<U32>, parts))
+    case P.Parsed{_, P.Header{+width, +height, +bpp}, _, parts, total, _}:
       do Result<&2, &1, String, Pixels.Raster>:
-        raw : Array<U32> <- Z.inflate(data, ((width * bpp + 1) * height : U32))
+        raw : Array<U32> <- Z.inflate_parts(List.reverse(&2, +List<U32>, parts), total, ((width * bpp + 1) * height : U32))
         Pixels.convert(raw, width, height, bpp)
 
 def decode_png(+bytes: +List<U32>) -> Result<&2, &1, String, Pixels.Raster>:
