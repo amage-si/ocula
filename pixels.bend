@@ -26,30 +26,32 @@ def predictor(filter: U32, a: U32, b: U32, c: U32) -> U32:
     case _:
       paeth(a, b, c)
 
-def reconstruct(data: Array<U32>, +index: U32, +x: U32, +row: U32, +bpp: U32, +stride: U32, filter: U32) -> Array<U32>:
-  B.get(~Array<U32>, data, index, value => data => (
-    B.get_or_zero(~Array<U32>, data, U32.sub(index, bpp), U32.is_ge(x, bpp), a => data => (
-      B.get_or_zero(~Array<U32>, data, U32.sub(index, stride), U32.is_gt(row, 0), b => data => (
-        B.get_or_zero(~Array<U32>, data, U32.sub(U32.sub(index, stride), bpp), (row > 0 : U32) && (x >= bpp : U32), c => data => (
-          data[index] <- U32.and(U32.add(value, predictor(filter, a, b, c)), 255)
-        ))
-      ))
-    ))
-  ))
-
-def row_bytes(n: Nat, data: Array<U32>, +index: U32, +x: U32, +row: U32, +bpp: U32, +stride: U32, +filter: U32) -> Array<U32>:
+# One scanline byte per step: `cur` holds the raw byte and the byte above it,
+# read directly; the last four reconstructed bytes (l1..l4) and the four bytes
+# above them (u1..u4) are carried, so the left and upper-left neighbours need no
+# read. They start at zero, which is the PNG value before the first pixel.
+# Bytes above the first row are masked to zero by `top`.
+def row_bytes(n: Nat, cur: Array<U32> & (U32 & U32), +index: U32, +stride: U32, +bpp: U32, +filter: U32, +top: U32, +l1: U32, +l2: U32, +l3: U32, +l4: U32, +u1: U32, +u2: U32, +u3: U32, +u4: U32) -> Array<U32>:
   match n:
     case 0n:
+      (data, _) = cur
       data
     case 1n+p:
-      row_bytes(p, reconstruct(data, index, x, row, bpp, stride, filter), U32.inc(index), U32.inc(x), row, bpp, stride, filter)
+      (data, (raw, up)) = cur
+      +b = U32.mul(up, top)
+      +wide = U32.is_eq(bpp, 4)
+      +v = U32.and(U32.add(raw, predictor(filter, Bool.pick(U32, wide, l4, l3), b, Bool.pick(U32, wide, u4, u3))), 255)
+      +next = U32.inc(index)
+      data = data[index] <- v
+      row_bytes(p, B.read2(data, next, U32.sub(next, stride)), next, stride, bpp, filter, top, v, l1, l2, l3, b, u1, u2, u3)
 
-def row(data: Array<U32>, +row_index: U32, +stride: U32, bpp: U32) -> Result<&2, &1, String, Array<U32>>:
+def row(data: Array<U32>, +row_index: U32, +stride: U32, +bpp: U32) -> Result<&2, &1, String, Array<U32>>:
   +start = U32.mul(row_index, stride)
+  +first = U32.inc(start)
   B.get(~Result<&2, &1, String, Array<U32>>, data, start, +filter => data => (
     do Result<&2, &1, String, Array<U32>>:
       u : Unit <- B.require((filter <= 4 : U32), "unsupported PNG scanline filter")
-      return row_bytes(U32.to_nat(U32.sub(stride, 1)), data, U32.inc(start), 0, row_index, bpp, stride, filter)
+      return row_bytes(U32.to_nat(U32.sub(stride, 1)), B.read2(data, first, U32.sub(first, stride)), first, stride, bpp, filter, Bool.to_u32(U32.is_gt(row_index, 0)), 0, 0, 0, 0, 0, 0, 0, 0)
   ))
 
 def rows(n: Nat, +y: U32, +stride: U32, +bpp: U32, r: Result<&2, &1, String, Array<U32>>) -> Result<&2, &1, String, Array<U32>>:
