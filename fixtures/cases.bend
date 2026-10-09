@@ -34,7 +34,9 @@ def valid() -> List<(String & U32)>:
    ("random-18", 3455611954),
    ("random-19", 4025258832),
    ("metadata", 74984715),
-   ("metadata-gamma-before-srgb", 74984715)]
+   ("metadata-gamma-before-srgb", 74984715),
+   ("long-huffman-codes", 641713876),
+   ("mixed-blocks", 3197064029)]
 
 def invalid() -> +List<String>:
   ["truncated-0",
@@ -77,4 +79,5 @@ def invalid() -> +List<String>:
    "reserved-block",
    "stored-complement",
    "no-idat",
-   "oversize-input"]
+   "oversize-input",
+   "truncated-deflate"]

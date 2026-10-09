@@ -135,6 +135,14 @@
     [
       "metadata-gamma-before-srgb",
       74984715
+    ],
+    [
+      "long-huffman-codes",
+      641713876
+    ],
+    [
+      "mixed-blocks",
+      3197064029
     ]
   ],
   "invalid": [
@@ -301,6 +309,10 @@
     [
       "oversize-input",
       "2 MiB"
+    ],
+    [
+      "truncated-deflate",
+      "truncated DEFLATE"
     ]
   ],
   "read_regressions": [
@@ -347,7 +359,7 @@
     "bad-fcheck.png": "f3d4781a5ea1f764f9315fafa4b11bb4ddadaf100500437ccca08ba174dd6f30",
     "bad-filter.png": "9a930437bfca7fc8785a0b0382e9b0ccd30c5e1a210c8b6bf48fa269c0740c42",
     "bad-signature.png": "86dad6f9113ecff6c6a40842d093d3080e5015456bb477bdaa1aa0147beeccbc",
-    "cases.bend": "12f610e2b1b01f35aa834515c76679efbe3cf28439e86cd05db154215f54e896",
+    "cases.bend": "f48ad74b2994d9dc46c75e58d5fc12396b53748676ef7d8c332f6883c2f1de79",
     "depth-16.png": "3c0a13aa2b66bec39f451543832298c45e508c9b999f718bc7da917b305748c9",
     "dictionary.png": "bf558fc8ffbe18e4b8b5d31e0e0ebf517a8bcd4ff432284a82e184a3e1d0aa17",
     "duplicate-ihdr.png": "3e8b057dc6d079e6f8144a77ecb38669f584200855262be858a37d8248230c8e",
@@ -368,11 +380,15 @@
     "io-overlimit.bin": "38c8f68750acf9df5b1f0e05598a79e96a790020ae4d1517aec2af57a64ec587",
     "io-small.bin": "bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52",
     "large-dimensions.png": "a3d0547a088a8b2b0576c20f73adb65e0e1336bb23818325aedeae008e1182df",
+    "long-huffman-codes.png": "b0a6e486f93c66977dc400a6619119a4574205f49d9c38933c4285eadd3b9eba",
+    "long-huffman-codes.rgba": "63663ed9ffc9470d74749113767f5cdc5ea3ef66994035ce88ad6002f3665953",
     "long-output.png": "41920232d1b67228acf0f2adb6c37dff6b32798e91bf33910b4d84b1ab8fd1a3",
     "metadata-gamma-before-srgb.png": "ddb39ec62ad76de560be47dbee7f8b46b1878e6758d5b9deb1e0d1359edb3f3c",
     "metadata-gamma-before-srgb.rgba": "050bda099af4c2a02b924a4439835d7a6cf66294499f1057a9dc9163ab92bd42",
     "metadata.png": "cc50408fe6fcfa720acd37361e285865960a24f33b728441f2c123a5a8151e78",
     "metadata.rgba": "050bda099af4c2a02b924a4439835d7a6cf66294499f1057a9dc9163ab92bd42",
+    "mixed-blocks.png": "db22d3d664a963e7a43efe5c788d3d57fa2e6ffd6e14de904d59c9a6223ef028",
+    "mixed-blocks.rgba": "c79a2df892767d07f1cc433c2e424d9b362119112bec2545812dcd3c201c1920",
     "no-idat.png": "6422564120b76bbc05819b296f96f7e82593e60bb33f3ecf2abaad1cdbf85339",
     "non-srgb-gamma.png": "dedb37763ef039edddedf8a7e10fc341e58777ef670aa3a3a2410583db81a43f",
     "one-pixel-filter-0.png": "2468c0b994f418058f0f2a02030c9c8ec05cd56e7958dd46978bc704094268f1",
@@ -458,6 +474,7 @@
     "truncated-69.png": "b0cf8cc383da230c0598cc9e97cfabf14478146ee55bdccc6b296cc2a69c3c4f",
     "truncated-7.png": "214246cd551e66de7b92c04e55355d0b3751adc15ee8ecc4066e0e9a7c9d3599",
     "truncated-8.png": "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6",
+    "truncated-deflate.png": "be5a10c4bf5bee1e859a2a2d2ea5afaa34ef41268cd77b57db3e8a3b796e19c2",
     "zero-width.png": "5fbe48f1ff51701ba463241c73c8d801260a75405f761fca52a93614dec70e22"
   }
 }

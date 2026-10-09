@@ -134,7 +134,82 @@ def fixtures():
     invalid('stored-complement',png(1,1,6,bytes([120,1,1,5,0,0,0])+raw+struct.pack('>I',zlib.adler32(raw))),'complement')
     invalid('no-idat',base[:33]+chunk(b'IEND',b''),'IEND')
     invalid('oversize-input',base+bytes(2097153-len(base)),'2 MiB')
+    # Decoder-path coverage, added with the table-driven inflate. A separate
+    # generator keeps every earlier fixture byte for byte.
+    more = random.Random(20261009)
+    rows = [bytes(skewed(more) for _ in range(64*4)) for _ in range(64)]
+    stream = encoded_with(filtered(rows,4,[0]*64),9,zlib.Z_HUFFMAN_ONLY)
+    assert max_literal_code_length(stream) > 9, 'fixture must exercise literal codes longer than 9 bits'
+    good('long-huffman-codes',png(64,64,6,stream),b''.join(rows))
+    rows = [bytes((x*7+y*13+more.randrange(4)) % 256 for x in range(40*3)) for y in range(24)]
+    raw = filtered(rows,3,[y%5 for y in range(24)])
+    good('mixed-blocks',png(40,24,2,mixed_blocks(raw)),b''.join(b''.join(r[x:x+3]+b'\xff' for x in range(0,len(r),3)) for r in rows))
+    invalid('truncated-deflate',png(64,64,6,stream[:len(stream)//2]),'truncated DEFLATE')
     return ok,bad
+
+
+def skewed(rng):
+    """A byte with a geometric distribution, so rare values get long codes."""
+    v = 0
+    while v < 255 and rng.random() < 0.55:
+        v += 1
+    return v
+
+
+def encoded_with(raw, level, strategy):
+    c = zlib.compressobj(level, zlib.DEFLATED, 15, 8, strategy)
+    return c.compress(raw) + c.flush()
+
+
+def mixed_blocks(raw):
+    """A zlib stream of stored, fixed and dynamic blocks, plus the empty stored
+    blocks of full flushes. Raw DEFLATE segments that end on a full flush are
+    byte aligned, so they concatenate into one valid stream."""
+    third = len(raw) // 3
+    parts = [(raw[:third], 0, zlib.Z_DEFAULT_STRATEGY), (raw[third:2*third], 6, zlib.Z_FIXED), (raw[2*third:], 9, zlib.Z_DEFAULT_STRATEGY)]
+    body = b''
+    for i, (part, level, strategy) in enumerate(parts):
+        c = zlib.compressobj(level, zlib.DEFLATED, -15, 8, strategy)
+        body += c.compress(part) + c.flush(zlib.Z_FINISH if i == len(parts) - 1 else zlib.Z_FULL_FLUSH)
+    return bytes([120, 156]) + body + struct.pack('>I', zlib.adler32(raw))
+
+
+def max_literal_code_length(stream):
+    """Longest literal/length code of the first block, which must be dynamic."""
+    bits, pos = int.from_bytes(stream[2:], 'little'), 0
+    def take(n):
+        nonlocal pos
+        value = (bits >> pos) & ((1 << n) - 1)
+        pos += n
+        return value
+    take(1)
+    assert take(2) == 2, 'first block must be dynamic'
+    hlit, hdist, hclen = take(5) + 257, take(5) + 1, take(4) + 4
+    lengths19 = [0] * 19
+    for i in range(hclen):
+        lengths19[[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15][i]] = take(3)
+    codes, code = {}, 0
+    for length in range(1, 8):
+        for sym in range(19):
+            if lengths19[sym] == length:
+                codes[(length, code)] = sym
+                code += 1
+        code <<= 1
+    lengths = []
+    while len(lengths) < hlit + hdist:
+        code = 0
+        for length in range(1, 8):
+            code = (code << 1) | take(1)
+            if (length, code) in codes:
+                sym = codes[(length, code)]
+                break
+        if sym < 16:
+            lengths.append(sym)
+        elif sym == 16:
+            lengths += [lengths[-1]] * (3 + take(2))
+        else:
+            lengths += [0] * ((3 + take(3)) if sym == 17 else (11 + take(7)))
+    return max(lengths[:hlit])
 
 
 def prepare():

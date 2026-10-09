@@ -29,12 +29,13 @@ is not a decoder for every PNG.
   `sRGB`, and a valid `pHYs` before `IDAT`. A PNG with no color information is
   interpreted as sRGB; there is no color management.
 
-The native suite has **101 checks**: CRC and Huffman edge cases, LZ77
+The native suite has **104 checks**: CRC and Huffman edge cases, LZ77
 back-references, pixel bounds, array capacity, channel order, file reads up to
-EOF and the size limit, **34 generated PNGs** compared with their source pixels
+EOF and the size limit, **36 generated PNGs** compared with their source pixels
 (RGB/RGBA, every filter, first row and first pixel, width 1, split `IDAT`,
-stored/fixed/dynamic blocks, overlapping copies), and **41 invalid files**
-rejected (truncation, CRC/Adler errors, headers, dimension and allocation
+stored/fixed/dynamic and mixed blocks, Huffman codes up to 15 bits,
+overlapping copies), and **42 invalid files** rejected (truncation, including
+inside the DEFLATE stream, CRC/Adler errors, headers, dimension and allocation
 limits, filters, zlib/DEFLATE errors, unsupported features).
 
 An external oracle also decoded four real PNGs from `/usr/share/pixmaps`
