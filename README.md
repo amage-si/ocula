@@ -21,8 +21,9 @@ is not a decoder for every PNG.
   decompressed data, and the decompressed length must match the scanlines exactly.
 - DEFLATE stored, fixed, and dynamic Huffman blocks, code-length repeats, and
   overlapping LZ77 copies. End-of-block, invalid trees, reserved symbols,
-  stored-length complements, lengths, and distances are validated before any
-  array access.
+  stored-length complements, lengths, and distances are validated; a match is
+  checked once against the written output and the exact image size before it
+  is copied, and every table or input index is bounded by construction.
 - Filters None, Sub, Up, Average, and Paeth, in modulo-256 arithmetic.
 - Accepted ancillary chunks: a validated optional `PLTE` for truecolor (pixels
   unchanged), `sRGB` with rendering intent 0–3, `gAMA` 45455 **together with**
@@ -109,9 +110,10 @@ scanlines. Dimension products are computed only after the limits are checked,
 and no allocation follows a chunk length before its limit is validated.
 
 Cost: input and chunks are lists; scanlines and pixels are Bend arrays, which
-are trees with logarithmic access and one `U32` per byte or pixel. Huffman
-decoding uses counts per code length and a sorted symbol list, so one symbol can
-scan up to 288 entries. `IDAT` concatenation and the list handed to Chromi are
+are trees with logarithmic access and one `U32` per byte or pixel. The zlib
+payload is copied into an array once; Huffman decoding looks up 9 bits at a
+time in a table rebuilt per block, and only longer codes walk the code lengths
+(at most 15 steps). `IDAT` concatenation and the list handed to Chromi are
 linear copies. There is no streaming decode or memory tuning yet. The full
 native suite ran in 0.30 s with a sampled peak RSS of about 91 MiB, process
 start-up included; this is not an isolated decode benchmark.
