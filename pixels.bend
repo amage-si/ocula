@@ -125,30 +125,35 @@ def pixel(image: Raster, +x: U32, +y: U32) -> Result<&2, &1, String, Raster & U3
         u : Unit <- B.require((x < w : U32) && (y < h : U32), "pixel outside image")
         B.get(~Result<&2, &1, String, Raster & U32>, pixels, (y * w + x : U32), p => pixels => Done{(Raster{w, h, pixels}, p)})
 
-def rgba_bytes_loop(n: Nat, +index: U32, pixels: Array<U32>, acc: +List<U32>) -> +List<U32>:
+# Both list views walk the pixels backwards, prepending, so they need one
+# closure-free pass and no reversal; slots past width * height are never read.
+def bytes_down(n: Nat, cur: Array<U32> & U32, +i: U32, acc: +List<U32>) -> +List<U32>:
   match n:
     case 0n:
-      List.reverse(&2, U32, acc)
+      acc
     case 1n+p:
-      B.get(~(+List<U32>), pixels, index, +v => pixels => (
-        rgba_bytes_loop(p, U32.inc(index), pixels, U32.and(v, 255) <> U32.and(U32.div(v, 256), 255) <> U32.and(U32.div(v, 65536), 255) <> U32.div(v, 16777216) <> acc)
-      ))
+      (pixels, +v) = cur
+      +prev = U32.sub(i, 1)
+      bytes_down(p, pixels[prev], prev, U32.div(v, 16777216) <> U32.and(U32.div(v, 65536), 255) <> U32.and(U32.div(v, 256), 255) <> U32.and(v, 255) <> acc)
 
 def rgba_bytes(image: Raster) -> +List<U32>:
   match image:
-    case Raster{w, h, pixels}:
-      rgba_bytes_loop(U32.to_nat(U32.mul(w, h)), 0, pixels, Nil{})
+    case Raster{+w, +h, pixels}:
+      +last = U32.sub(U32.mul(w, h), 1)
+      bytes_down(U32.to_nat(U32.mul(w, h)), pixels[last], last, Nil{})
 
-def packed_loop(n: Nat, xs: List<U32>, acc: +List<U32>) -> +List<U32>:
-  match n xs:
-    case 0n _:
-      List.reverse(&2,U32,acc)
-    case _ Nil{}:
-      List.reverse(&2,U32,acc)
-    case 1n+p h <> t:
-      packed_loop(p,t,h <> acc)
+def packed_down(n: Nat, cur: Array<U32> & U32, +i: U32, acc: +List<U32>) -> +List<U32>:
+  match n:
+    case 0n:
+      acc
+    case 1n+p:
+      (pixels, v) = cur
+      +prev = U32.sub(i, 1)
+      packed_down(p, pixels[prev], prev, v <> acc)
 
+# Row-major 0xRRGGBBAA words, exactly width * height of them.
 def packed_pixels(image: Raster) -> +List<U32>:
   match image:
-    case Raster{w,h,pixels}:
-      packed_loop(U32.to_nat(U32.mul(w,h)),Array.to_list(~U32,pixels),Nil{})
+    case Raster{+w, +h, pixels}:
+      +last = U32.sub(U32.mul(w, h), 1)
+      packed_down(U32.to_nat(U32.mul(w, h)), pixels[last], last, Nil{})
