@@ -64,6 +64,38 @@ earlier case was removed. One rebuild of that revision was rejected by the
 checker (a test destructured the pair returned by `Array.size` directly); the
 test was fixed by passing the pair as a parameter, without crashing anything.
 
+## Performance
+
+`examples/bench.bend` decodes each PNG given to it N times after reading the
+file once, and prints the mean and minimum time per decode. Each decode starts
+only after the clock read before it and is forced by printing a pixel checksum
+before the next clock read.
+
+```sh
+bend examples/bench.bend -o build/bench
+./build/bench --threads 2 --gpu off 20 /usr/share/pixmaps/kitty.png
+```
+
+Recorded on 2026-10-09 (Bend 2.0.35, AMD Ryzen 7 5800H shared with other
+work, load average 5–10), mean of 20 decodes, the original decoder against the
+reworked one in the same session:
+
+| Image | Before | After |
+| --- | --- | --- |
+| `kitty.png` 256×256 RGBA, 8 KB | 48–56 ms | 2.0–3.0 ms |
+| `helium-browser.png` 256×256 | 60–73 ms | 2.4–2.6 ms |
+| `nvim.png` 128×128 | 19–21 ms | 0.9 ms |
+| `filezilla.png` 48×48 | 3.1 ms | 0.35 ms |
+| `spotify-client.png` 512×512 | 211–223 ms | 8.0–8.6 ms |
+| generated 512×512 RGBA noise, all filters, 857 KB | 1269–1362 ms | 70–75 ms |
+
+Each step was measured on its own; the commit messages record them. Closure
+calls were 57% of a profile of `kitty.png` before; the remaining time is spread
+over unfiltering, the Huffman loop, allocating the arrays, Adler-32, and, for
+large files, the list-based chunk parsing and CRC-32. Every output was compared
+with the original decoder's, and a differential fuzz of about 3000 generated
+PNGs (half corrupted or cut) gave the same decision, pixels and error message.
+
 ## Integration in a window
 
 The sibling Splina demo decoded `kitty.png` with Ocula and drew it with an SVG

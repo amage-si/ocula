@@ -109,14 +109,20 @@ Limits: input up to 2 MiB with values 0–255, 1–4096 pixels per axis, at most
 scanlines. Dimension products are computed only after the limits are checked,
 and no allocation follows a chunk length before its limit is validated.
 
-Cost: input and chunks are lists; scanlines and pixels are Bend arrays, which
-are trees with logarithmic access and one `U32` per byte or pixel. The zlib
-payload is copied into an array once; Huffman decoding looks up 9 bits at a
-time in a table rebuilt per block, and only longer codes walk the code lengths
-(at most 15 steps). `IDAT` concatenation and the list handed to Chromi are
-linear copies. There is no streaming decode or memory tuning yet. The full
-native suite ran in 0.30 s with a sampled peak RSS of about 91 MiB, process
-start-up included; this is not an isolated decode benchmark.
+Cost: input and chunks are lists; the zlib stream, scanlines and pixels are
+Bend arrays with one `U32` per byte or pixel. The `IDAT` chunks are written
+into one array, Huffman decoding looks up 9 bits at a time in a table rebuilt
+per block (only longer codes walk the code lengths, at most 15 steps), and the
+hot loops (symbols, LZ77 copies, unfiltering with packing, Adler-32) are
+first-order code with no closure per byte. The list handed to Chromi is one
+linear pass. There is no streaming decode or memory tuning yet.
+
+Speed, measured with `examples/bench.bend` (mean of 20 decodes after the file
+is read, `--threads 2 --gpu off`, on a shared, loaded Ryzen 7 5800H): `kitty.png`
+256×256 about 2–3 ms (it was about 48–55 ms before the decoder was reworked),
+`spotify-client.png` 512×512 about 8 ms (was about 210 ms). Large files are
+now dominated by the list-based chunk parsing and CRC-32. See
+[docs/validation.md](docs/validation.md#performance).
 
 The tests and the oracle are evidence for the declared subset; they do not prove
 full PNG conformance or the correctness of the runtime and its IO.
@@ -134,6 +140,7 @@ full PNG conformance or the correctness of the runtime and its IO.
 | [tests.bend](tests.bend) | Native checks. |
 | [fixtures/](fixtures/) | Generated PNGs, expected pixels, read-limit files, and their Bend tables. |
 | [examples/decode.bend](examples/decode.bend) | Command-line decoder: PNG in, raw RGBA out. |
+| [examples/bench.bend](examples/bench.bend) | Timing harness: repeated decodes of the given PNGs. |
 | [tools/oracle.py](tools/oracle.py) | Validation only: fixture generator and byte-for-byte oracle. |
 | [docs/api.md](docs/api.md) | Types, ownership, limits, and the accepted PNG subset. |
 | [docs/validation.md](docs/validation.md) | How the decoder was validated, with recorded results. |
