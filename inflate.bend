@@ -8,7 +8,7 @@ type Huffman is Data:
   Huffman{counts: +List<U32>, symbols: +List<U32>}
 
 type Output is Type:
-  Output{data: Array<U32>, used: U32, limit: U32, adler_a: U32, adler_b: U32}
+  Output{data: Array<U32>, used: U32, limit: U32}
 
 def one(s: Bits) -> Result<&2, &1, String, U32 & Bits>:
   match s:
@@ -144,36 +144,40 @@ def put_value(out: Output, +value: U32, room: Bool) -> Result<&2, &1, String, Ou
   match out room:
     case _ False{}:
       Fail{"DEFLATE output exceeds exact image size"}
-    case Output{data, +used, limit, a, b} True{}:
-      +a = ((a + value) % 65521 : U32)
+    case Output{data, +used, limit} True{}:
       data = data[used] <- value
-      Done{Output{data, U32.inc(used), limit, a, ((b + a) % 65521 : U32)}}
+      Done{Output{data, U32.inc(used), limit}}
 
 def put(out: Output, value: U32) -> Result<&2, &1, String, Output>:
   match out:
-    case Output{data, +used, +limit, a, b}:
-      put_value(Output{data, used, limit, a, b}, value, U32.is_lt(used, limit))
+    case Output{data, +used, +limit}:
+      put_value(Output{data, used, limit}, value, U32.is_lt(used, limit))
 
-def copy_read(used: U32, limit: U32, a: U32, b: U32, pair: Array<U32> & U32) -> Result<&2, &1, String, Output>:
-  (data, v) = pair
-  put(Output{data, used, limit, a, b}, v)
+# `cur` is the byte `distance` back from `used`. copy() has already checked
+# 0 < distance <= used and length <= limit - used, so every index stays in
+# the written part of the output and no step needs another check.
+def copy_loop(n: Nat, cur: Array<U32> & U32, +used: U32, +distance: U32) -> Array<U32> & U32:
+  match n:
+    case 0n:
+      (data, _) = cur
+      (data, used)
+    case 1n+p:
+      (data, v) = cur
+      data = data[used] <- v
+      +next = U32.inc(used)
+      copy_loop(p, data[U32.sub(next, distance)], next, distance)
 
-def copy_loop(n: Nat, +distance: U32, r: Result<&2, &1, String, Output>) -> Result<&2, &1, String, Output>:
-  match n r:
-    case _ Fail{e}:
-      Fail{e}
-    case 0n Done{out}:
-      Done{out}
-    case 1n+p Done{Output{data, +used, limit, a, b}}:
-      copy_loop(p, distance, copy_read(used, limit, a, b, data[U32.sub(used, distance)]))
+def copied(+limit: U32, pair: Array<U32> & U32) -> Output:
+  (data, used) = pair
+  Output{data, used, limit}
 
 def copy(out: Output, +length: U32, +distance: U32) -> Result<&2, &1, String, Output>:
   match out:
-    case Output{data, +used, +limit, a, b}:
+    case Output{data, +used, +limit}:
       do Result<&2, &1, String, Output>:
         u : Unit <- B.require((distance > 0 : U32) && (distance <= used : U32) && (distance <= 32768 : U32), "invalid DEFLATE backward distance")
         u : Unit <- B.require((length <= limit - used : U32), "DEFLATE match exceeds exact image size")
-        copy_loop(U32.to_nat(length), distance, Done{Output{data, used, limit, a, b}})
+        return copied(limit, copy_loop(U32.to_nat(length), data[U32.sub(used, distance)], used, distance))
 
 def fixed_lengths() -> +List<U32>:
   List.concat(&2, U32, [List.replicate(U32, 144n, 8), List.replicate(U32, 112n, 9), List.replicate(U32, 24n, 7), List.replicate(U32, 8n, 8)])
@@ -236,8 +240,8 @@ def compressed_loop(fuel: Nat, +lit: Huffman, +dist: Huffman, r: Result<&2, &1, 
 
 def compressed(lit: Huffman, dist: Huffman, s: Bits, out: Output) -> Result<&2, &1, String, Step>:
   match out:
-    case Output{data, used, +limit, a, b}:
-      compressed_loop(U32.to_nat(U32.inc(limit)), lit, dist, Done{Step{s, Output{data, used, limit, a, b}, False{}}})
+    case Output{data, used, +limit}:
+      compressed_loop(U32.to_nat(U32.inc(limit)), lit, dist, Done{Step{s, Output{data, used, limit}, False{}}})
 
 def stored_loop(n: Nat, r: Result<&2, &1, String, Step>) -> Result<&2, &1, String, Step>:
   match n r:
@@ -381,13 +385,40 @@ def blocks(fuel: Nat, r: Result<&2, &1, String, Step>) -> Result<&2, &1, String,
       next = read(~Step, 1n, s, final => s => read(~Step, 2n, s, kind => s => block_result(final, block(kind, s, out))))
       blocks(p, next)
 
+# Adler-32 over data[0..n). The sums are reduced every 5552 bytes, as in zlib:
+# 5552 is the largest run for which b cannot pass 2^32 starting from a, b <
+# 65521, so `run` counts down the bytes left before the next reduction.
+def adler_loop(n: Nat, +run: U32, cur: Array<U32> & U32, +index: U32, +a: U32, +b: U32) -> Array<U32> & U32:
+  match n run:
+    case 0n _:
+      (data, _) = cur
+      (data, (U32.mod(b, 65521) * 65536 + U32.mod(a, 65521) : U32))
+    case 1n+p 0:
+      (data, v) = cur
+      +sa = U32.add(a, v)
+      +next = U32.inc(index)
+      adler_loop(p, 5551, data[next], next, U32.mod(sa, 65521), U32.mod(U32.add(b, sa), 65521))
+    case 1n+p _:
+      (data, v) = cur
+      +sa = U32.add(a, v)
+      +next = U32.inc(index)
+      adler_loop(p, U32.sub(run, 1), data[next], next, sa, U32.add(b, sa))
+
+def adler32(data: Array<U32>, +size: U32) -> Array<U32> & U32:
+  adler_loop(U32.to_nat(size), 5551, data[0], 0, 1, 0)
+
+def check_adler(+expected: U32, pair: Array<U32> & U32) -> Result<&2, &1, String, Array<U32>>:
+  (data, +actual) = pair
+  do Result<&2, &1, String, Array<U32>>:
+    u : Unit <- B.require(U32.is_eq(expected, actual), "zlib Adler-32 mismatch")
+    return data
+
 def finish(state: Step) -> Result<&2, &1, String, Array<U32>>:
   match state:
-    case Step{Bits{a <> b <> c <> d <> Nil{}, _, _}, Output{data, used, limit, aa, ab}, _}:
+    case Step{Bits{a <> b <> c <> d <> Nil{}, _, _}, Output{data, +used, +limit}, _}:
       do Result<&2, &1, String, Array<U32>>:
         u : Unit <- B.require(U32.is_eq(used, limit), "DEFLATE output is shorter than image size")
-        u : Unit <- B.require(U32.is_eq((a * 16777216 + b * 65536 + c * 256 + d : U32), (ab * 65536 + aa : U32)), "zlib Adler-32 mismatch")
-        return data
+        check_adler((a * 16777216 + b * 65536 + c * 256 + d : U32), adler32(data, limit))
     case _:
       Fail{"missing Adler-32 or trailing bytes after zlib stream"}
 
@@ -399,7 +430,7 @@ def inflate(bytes: +List<U32>, +size: U32) -> Result<&2, &1, String, Array<U32>>
         u : Unit <- B.require(U32.is_eq(cmf, 120), "unsupported zlib header (requires DEFLATE, 32 KiB window)")
         u : Unit <- B.require(U32.is_eq(((cmf * 256 + flg) % 31 : U32), 0), "invalid zlib FCHECK")
         u : Unit <- B.require(U32.is_eq(U32.and(flg, 32), 0), "zlib preset dictionary is unsupported")
-        state : Step <- blocks(U32.to_nat(65536), Done{Step{Bits{rest, 0, 0}, Output{B.allocate(size), 0, size, 1, 0}, False{}}})
+        state : Step <- blocks(U32.to_nat(65536), Done{Step{Bits{rest, 0, 0}, Output{B.allocate(size), 0, size}, False{}}})
         finish(state)
     case _:
       Fail{"truncated zlib header"}
