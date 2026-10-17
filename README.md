@@ -8,7 +8,7 @@ DEFLATE (stored, fixed, and dynamic Huffman), Adler-32, and scanline filters
 are all implemented in Bend 2, without libpng, zlib, or any hand-written native
 code.
 
-**Status:** early Linux implementation, tested with **Bend 2.0.35**. It decodes
+**Status:** early Linux implementation, tested with **Bend 2.0.37**. It decodes
 8-bit RGB and RGBA, non-interlaced, and rejects everything else explicitly. It
 is not a decoder for every PNG.
 
